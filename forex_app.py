@@ -1,5 +1,5 @@
-# forex_app_v9.1.py
-# Smart Forex Predictor v9.1 — Debug-Enhanced + Candlestick Fix + Buy/Sell Suggestion + Auto Refresh
+# forex_app_v9.2.py
+# Smart Forex Predictor v9.2 — Robust Candlestick Fix + Enhanced Debug
 
 import streamlit as st
 import pandas as pd
@@ -15,17 +15,15 @@ import plotly.graph_objects as go
 # -----------------------
 # APP CONFIGURATION
 # -----------------------
-st.set_page_config(page_title="Smart Forex Predictor v9.1",
-                   page_icon="💹", layout="wide")
-
-st.markdown("<h1 style='text-align:center'>💹 Smart Forex Predictor App </h1>", unsafe_allow_html=True)
-st.caption("AI-powered forex predictor with candlestick visualization and debug diagnostics.")
+st.set_page_config(page_title="Smart Forex Predictor App ", page_icon="💹", layout="wide")
+st.markdown("<h1 style='text-align:center'>💹 Smart Forex Predictor v9.2</h1>", unsafe_allow_html=True)
+st.caption("AI-powered forex predictor with candlestick visualization, accuracy metrics, and debug safety.")
 
 # -----------------------
 # SIDEBAR CONTROLS
 # -----------------------
 refresh_interval = st.sidebar.slider("🔁 Auto-refresh interval (minutes)", 1, 30, 5)
-st.sidebar.info("The app auto-refreshes for live updates. You can adjust this interval below.")
+st.sidebar.info("Auto-refresh keeps your predictions up to date.")
 st.sidebar.markdown("---")
 
 # -----------------------
@@ -42,7 +40,7 @@ valid_symbols = {
 }
 
 # -----------------------
-# FETCH LIVE PRICES (for ticker)
+# FETCH LIVE PRICES
 # -----------------------
 @st.cache_data(ttl=60)
 def fetch_live_prices():
@@ -75,7 +73,6 @@ pair = st.selectbox("Select Forex Pair:", list(valid_symbols.keys()))
 symbol = valid_symbols[pair]
 period = st.selectbox("Select Period:", ["1mo", "3mo", "6mo", "1y", "2y"], index=2)
 interval = st.selectbox("Select Interval:", ["1d", "1h", "30m"], index=0)
-
 st.markdown("---")
 
 # -----------------------
@@ -101,26 +98,10 @@ st.write(f"Rows: {len(data)}, Columns: {list(data.columns)}")
 st.dataframe(data.tail())
 
 # -----------------------
-# ENSURE VALID DATETIME INDEX
-# -----------------------
-if not isinstance(data.index, pd.DatetimeIndex):
-    st.warning("⚠️ Index is not datetime. Attempting to convert...")
-    data = data.reset_index()
-    if "Date" in data.columns:
-        data["Datetime"] = pd.to_datetime(data["Date"])
-    elif "index" in data.columns:
-        data["Datetime"] = pd.to_datetime(data["index"])
-    else:
-        data["Datetime"] = pd.date_range(end=datetime.datetime.now(), periods=len(data), freq="D")
-else:
-    data = data.reset_index().rename(columns={"index": "Datetime"})
-
-# -----------------------
 # MODEL TRAINING
 # -----------------------
 data["Target"] = data["Close"].shift(-1)
 data = data.dropna()
-
 X = data[["Open", "High", "Low", "Close"]]
 y = data["Target"]
 
@@ -145,7 +126,6 @@ accuracy_est = max(0, (1 - mae / np.mean(y)) * 100)
 current_close = float(latest_row["Close"])
 pred_change = (next_pred - current_close) / current_close
 pred_change_pct = pred_change * 100
-
 buy_threshold = 0.0006
 sell_threshold = -0.0006
 
@@ -179,6 +159,22 @@ col4.markdown(f"<div style='padding:10px;text-align:center;border-radius:6px;bac
 st.subheader("🕯️ Candlestick Chart (with Predicted Next Close)")
 
 try:
+    # ---- Fix: Ensure a valid Datetime column ----
+    if isinstance(data.index, pd.DatetimeIndex):
+        data = data.reset_index()
+        idx_col = data.columns[0]
+        if idx_col != "Datetime":
+            data.rename(columns={idx_col: "Datetime"}, inplace=True)
+    else:
+        possible = [c for c in data.columns if c.lower() in ('date', 'datetime', 'time', 'timestamp', 'index')]
+        if possible:
+            data["Datetime"] = pd.to_datetime(data[possible[0]], errors="coerce")
+        else:
+            data["Datetime"] = pd.date_range(end=pd.Timestamp.now(), periods=len(data), freq="D")
+
+    data["Datetime"] = pd.to_datetime(data["Datetime"], errors="coerce")
+    data = data.dropna(subset=["Datetime"]).reset_index(drop=True)
+
     if len(data) < 2:
         st.warning("Not enough data to plot candles.")
     else:
@@ -187,8 +183,10 @@ try:
             next_time = last_time + pd.Timedelta(days=1)
         elif interval == "1h":
             next_time = last_time + pd.Timedelta(hours=1)
-        else:
+        elif interval == "30m":
             next_time = last_time + pd.Timedelta(minutes=30)
+        else:
+            next_time = last_time + pd.Timedelta(days=1)
 
         fig = go.Figure(data=[go.Candlestick(
             x=data["Datetime"],
@@ -216,8 +214,11 @@ try:
             margin=dict(l=10, r=10, t=30, b=10)
         )
         st.plotly_chart(fig, use_container_width=True)
+
 except Exception as e:
     st.error(f"⚠️ Error plotting candlestick: {e}")
+    st.write("Debug snapshot (first 5 rows):")
+    st.write(data.head())
 
 # -----------------------
 # DOWNLOAD REPORT
@@ -242,7 +243,7 @@ st.download_button(
     mime="text/csv"
 )
 
-st.caption("⚡ Powered by Yahoo Finance & Random Forest — Use predictions for education, not real trades.")
+st.caption("⚡ Powered by Yahoo Finance & Random Forest — Use for learning purposes only.")
 
 # -----------------------
 # AUTO REFRESH

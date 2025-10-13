@@ -1,6 +1,6 @@
-# forex_app_v2.py
-# Smart Forex Predictor v2
-# Built for Streamlit Cloud Deployment (with Telegram/Email alerts)
+# forex_app py
+# Smart Forex Predictor (Auto-Fetch Edition)
+# Built for Streamlit Cloud Deployment with live Forex data and alerts
 
 import streamlit as st
 import pandas as pd
@@ -12,44 +12,69 @@ from tensorflow.keras.layers import LSTM, Dense
 import requests
 import smtplib
 from email.mime.text import MIMEText
+import yfinance as yf
 
-st.set_page_config(page_title="Smart Forex Predictor v2", page_icon="💹", layout="centered")
+st.set_page_config(page_title="Smart Forex Predictor v3", page_icon="💹", layout="centered")
 
-st.title("💹 Smart Forex Predictor v2")
-st.caption("AI-powered Forex trend prediction and alert system")
+st.title("💹 Smart Forex Predictor v3 (Auto-Fetch Edition)")
+st.caption("AI-powered Forex trend prediction, live data fetching, and instant alerts.")
 
 # -----------------------------
-# 1. Load Forex Dataset
+# 1. Choose data source
 # -----------------------------
-uploaded_file = st.file_uploader("📂 Upload your Forex CSV data (with Date, Open, High, Low, Close columns):", type=["csv"])
+st.subheader("📊 Choose how to get your Forex data")
 
-if uploaded_file:
-    data = pd.read_csv(uploaded_file)
-    st.subheader("Data Preview")
-    st.dataframe(data.head())
+data_option = st.radio("Select data input method:",
+                       ["Fetch Live Data from Yahoo Finance", "Upload CSV File"])
 
-    # Basic validation
+data = None
+
+if data_option == "Fetch Live Data from Yahoo Finance":
+    pair = st.text_input("Enter Forex Pair Symbol (e.g., EURUSD=X, GBPUSD=X, USDJPY=X)", "EURUSD=X")
+    period = st.selectbox("Select Time Range", ["1mo", "3mo", "6mo", "1y", "2y", "5y"])
+    interval = st.selectbox("Select Data Interval", ["1d", "1h", "30m", "15m"])
+
+    if st.button("📥 Fetch Latest Data"):
+        with st.spinner("Fetching data from Yahoo Finance..."):
+            data = yf.download(pair, period=period, interval=interval)
+            if data.empty:
+                st.error("No data found for this symbol. Try another one.")
+            else:
+                data.reset_index(inplace=True)
+                st.success(f"✅ Successfully fetched {len(data)} records for {pair}")
+                st.dataframe(data.head())
+
+elif data_option == "Upload CSV File":
+    uploaded_file = st.file_uploader("📂 Upload your Forex CSV data", type=["csv"])
+    if uploaded_file:
+        data = pd.read_csv(uploaded_file)
+        st.success("✅ CSV data loaded successfully")
+        st.dataframe(data.head())
+
+# -----------------------------
+# 2. Proceed if we have data
+# -----------------------------
+if data is not None:
     required_cols = {"Open", "High", "Low", "Close"}
     if not required_cols.issubset(data.columns):
-        st.error("CSV file must contain at least: Date, Open, High, Low, Close columns")
+        st.error("Data must contain columns: Open, High, Low, Close")
         st.stop()
 
     # -----------------------------
-    # 2. Preprocessing
+    # 3. Preprocessing
     # -----------------------------
     scaler = MinMaxScaler(feature_range=(0, 1))
     data_scaled = scaler.fit_transform(data[["Open", "High", "Low", "Close"]])
 
-    # Create supervised dataset (X, y)
     X, y = [], []
     window_size = 5
     for i in range(window_size, len(data_scaled)):
         X.append(data_scaled[i - window_size:i])
-        y.append(data_scaled[i, 3])  # Predict Close
+        y.append(data_scaled[i, 3])
     X, y = np.array(X), np.array(y)
 
     # -----------------------------
-    # 3. Model Selection
+    # 4. Train Model
     # -----------------------------
     model_type = st.selectbox("Choose AI Model", ["LSTM Neural Network", "Random Forest"])
 
@@ -68,7 +93,7 @@ if uploaded_file:
         st.success("✅ Random Forest model trained successfully!")
 
     # -----------------------------
-    # 4. Make Prediction
+    # 5. Predict Next Price
     # -----------------------------
     last_data = data_scaled[-window_size:]
     last_data = np.expand_dims(last_data, axis=0)
@@ -85,7 +110,7 @@ if uploaded_file:
     st.metric("Predicted Next Close Price", f"${predicted_price:.4f}")
 
     # -----------------------------
-    # 5. Alerts via Secrets
+    # 6. Send Alerts
     # -----------------------------
     st.subheader("📢 Send Alerts (Telegram / Email)")
 
@@ -99,7 +124,7 @@ if uploaded_file:
     smtp_pass = secrets.get("SMTP_PASS")
     email_to = secrets.get("EMAIL_TO")
 
-    alert_msg = f"📈 Forex Alert: Predicted Close Price = ${predicted_price:.4f}"
+    alert_msg = f"📈 Forex Alert for {pair}: Predicted Close Price = ${predicted_price:.4f}"
 
     def send_telegram(msg):
         if not telegram_token or not telegram_chat:
@@ -136,4 +161,4 @@ if uploaded_file:
         send_email(alert_msg)
 
 else:
-    st.info("👆 Please upload your Forex CSV file to begin.")
+    st.info("👆 Fetch live Forex data or upload a CSV file to begin.")

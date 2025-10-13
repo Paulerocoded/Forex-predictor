@@ -1,164 +1,239 @@
-# forex_app py
-# Smart Forex Predictor (Auto-Fetch Edition)
-# Built for Streamlit Cloud Deployment with live Forex data and alerts
+# forex_app_v9.py
+# Smart Forex Predictor v9 — Candlestick + Buy/Sell suggestion + Live ticker + Auto-refresh
 
 import streamlit as st
 import pandas as pd
-import numpy as np
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-import requests
-import smtplib
-from email.mime.text import MIMEText
 import yfinance as yf
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
+import numpy as np
+from io import StringIO
+import time
+import datetime
+import plotly.graph_objects as go
 
-st.set_page_config(page_title="Smart Forex Predictor v3", page_icon="💹", layout="centered")
+# -----------------------
+# APP CONFIG
+# -----------------------
+st.set_page_config(page_title="Smart Forex Predictor v9",
+                   page_icon="💹", layout="wide")
 
-st.title("💹 Smart Forex Predictor v3 (Auto-Fetch Edition)")
-st.caption("AI-powered Forex trend prediction, live data fetching, and instant alerts.")
+st.markdown("<h1 style='text-align:center'>💹 Smart Forex Predictor App</h1>", unsafe_allow_html=True)
+st.caption("AI-powered forecasting with candlestick chart and actionable Buy / Sell / Hold suggestion")
 
-# -----------------------------
-# 1. Choose data source
-# -----------------------------
-st.subheader("📊 Choose how to get your Forex data")
+# -----------------------
+# SIDEBAR CONTROLS
+# -----------------------
+refresh_interval = st.sidebar.slider("🔁 Auto-refresh interval (minutes)", 1, 30, 5)
+ticker_speed = st.sidebar.slider("⏱️ Ticker update interval (seconds)", 5, 60, 15)
+st.sidebar.info("Keep this tab open for live updates. The app will auto-reload every selected interval.")
+st.sidebar.markdown("---")
 
-data_option = st.radio("Select data input method:",
-                       ["Fetch Live Data from Yahoo Finance", "Upload CSV File"])
+# -----------------------
+# SYMBOLS & TICKER
+# -----------------------
+valid_symbols = {
+    "EUR/USD": "EURUSD=X",
+    "GBP/USD": "GBPUSD=X",
+    "USD/JPY": "USDJPY=X",
+    "AUD/USD": "AUDUSD=X",
+    "USD/CAD": "USDCAD=X",
+    "USD/CHF": "USDCHF=X",
+    "NZD/USD": "NZDUSD=X"
+}
 
-data = None
-
-if data_option == "Fetch Live Data from Yahoo Finance":
-    pair = st.text_input("Enter Forex Pair Symbol (e.g., EURUSD=X, GBPUSD=X, USDJPY=X)", "EURUSD=X")
-    period = st.selectbox("Select Time Range", ["1mo", "3mo", "6mo", "1y", "2y", "5y"])
-    interval = st.selectbox("Select Data Interval", ["1d", "1h", "30m", "15m"])
-
-    if st.button("📥 Fetch Latest Data"):
-        with st.spinner("Fetching data from Yahoo Finance..."):
-            data = yf.download(pair, period=period, interval=interval)
-            if data.empty:
-                st.error("No data found for this symbol. Try another one.")
-            else:
-                data.reset_index(inplace=True)
-                st.success(f"✅ Successfully fetched {len(data)} records for {pair}")
-                st.dataframe(data.head())
-
-elif data_option == "Upload CSV File":
-    uploaded_file = st.file_uploader("📂 Upload your Forex CSV data", type=["csv"])
-    if uploaded_file:
-        data = pd.read_csv(uploaded_file)
-        st.success("✅ CSV data loaded successfully")
-        st.dataframe(data.head())
-
-# -----------------------------
-# 2. Proceed if we have data
-# -----------------------------
-if data is not None:
-    required_cols = {"Open", "High", "Low", "Close"}
-    if not required_cols.issubset(data.columns):
-        st.error("Data must contain columns: Open, High, Low, Close")
-        st.stop()
-
-    # -----------------------------
-    # 3. Preprocessing
-    # -----------------------------
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    data_scaled = scaler.fit_transform(data[["Open", "High", "Low", "Close"]])
-
-    X, y = [], []
-    window_size = 5
-    for i in range(window_size, len(data_scaled)):
-        X.append(data_scaled[i - window_size:i])
-        y.append(data_scaled[i, 3])
-    X, y = np.array(X), np.array(y)
-
-    # -----------------------------
-    # 4. Train Model
-    # -----------------------------
-    model_type = st.selectbox("Choose AI Model", ["LSTM Neural Network", "Random Forest"])
-
-    if model_type == "LSTM Neural Network":
-        model = Sequential([
-            LSTM(50, return_sequences=True, input_shape=(X.shape[1], X.shape[2])),
-            LSTM(50),
-            Dense(1)
-        ])
-        model.compile(optimizer="adam", loss="mean_squared_error")
-        model.fit(X, y, epochs=20, batch_size=16, verbose=0)
-        st.success("✅ LSTM model trained successfully!")
-    else:
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-        model.fit(X.reshape(X.shape[0], -1), y)
-        st.success("✅ Random Forest model trained successfully!")
-
-    # -----------------------------
-    # 5. Predict Next Price
-    # -----------------------------
-    last_data = data_scaled[-window_size:]
-    last_data = np.expand_dims(last_data, axis=0)
-
-    if model_type == "LSTM Neural Network":
-        predicted_scaled = model.predict(last_data)
-    else:
-        predicted_scaled = model.predict(last_data.reshape(1, -1))
-
-    predicted_price = scaler.inverse_transform(
-        np.concatenate((np.zeros((1, 3)), np.array(predicted_scaled).reshape(-1, 1)), axis=1)
-    )[0, 3]
-
-    st.metric("Predicted Next Close Price", f"${predicted_price:.4f}")
-
-    # -----------------------------
-    # 6. Send Alerts
-    # -----------------------------
-    st.subheader("📢 Send Alerts (Telegram / Email)")
-
-    secrets = st.secrets
-
-    telegram_token = secrets.get("TELEGRAM_TOKEN")
-    telegram_chat = secrets.get("TELEGRAM_CHAT")
-    smtp_host = secrets.get("SMTP_HOST")
-    smtp_port = secrets.get("SMTP_PORT")
-    smtp_user = secrets.get("SMTP_USER")
-    smtp_pass = secrets.get("SMTP_PASS")
-    email_to = secrets.get("EMAIL_TO")
-
-    alert_msg = f"📈 Forex Alert for {pair}: Predicted Close Price = ${predicted_price:.4f}"
-
-    def send_telegram(msg):
-        if not telegram_token or not telegram_chat:
-            st.warning("⚠️ Telegram secrets not set.")
-            return
+@st.cache_data(ttl=60)
+def fetch_live_prices():
+    prices = {}
+    for name, symbol in valid_symbols.items():
         try:
-            requests.get(f"https://api.telegram.org/bot{telegram_token}/sendMessage",
-                         params={"chat_id": telegram_chat, "text": msg})
-            st.success("✅ Telegram alert sent successfully!")
-        except Exception as e:
-            st.error(f"Telegram error: {e}")
+            df = yf.download(symbol, period="1d", interval="1m", progress=False)
+            if not df.empty:
+                prices[name] = float(df["Close"].iloc[-1])
+        except Exception:
+            continue
+    return prices
 
-    def send_email(msg):
-        if not all([smtp_host, smtp_port, smtp_user, smtp_pass, email_to]):
-            st.warning("⚠️ Email secrets not set.")
-            return
-        try:
-            email_msg = MIMEText(msg)
-            email_msg["Subject"] = "Forex Prediction Alert"
-            email_msg["From"] = smtp_user
-            email_msg["To"] = email_to
-
-            with smtplib.SMTP_SSL(smtp_host, int(smtp_port)) as server:
-                server.login(smtp_user, smtp_pass)
-                server.sendmail(smtp_user, email_to, email_msg.as_string())
-            st.success("✅ Email alert sent successfully!")
-        except Exception as e:
-            st.error(f"Email error: {e}")
-
-    if st.button("Send Telegram Alert"):
-        send_telegram(alert_msg)
-
-    if st.button("Send Email Alert"):
-        send_email(alert_msg)
-
+st.subheader("📡 Live Forex Ticker")
+prices = fetch_live_prices()
+if prices:
+    ticker_html = " &nbsp; | &nbsp; ".join([f"<b>{pair}</b>: {price:.5f}" for pair, price in prices.items()])
+    st.markdown(f"<div style='background:#111;color:#dfffd8;padding:8px;border-radius:6px'><marquee behavior=\"scroll\" direction=\"left\" scrollamount=\"4\">{ticker_html}</marquee></div>", unsafe_allow_html=True)
 else:
-    st.info("👆 Fetch live Forex data or upload a CSV file to begin.")
+    st.warning("Live ticker currently unavailable — try again in a moment.")
+
+# -----------------------
+# USER INPUTS
+# -----------------------
+pair = st.selectbox("Select Forex Pair to Predict:", list(valid_symbols.keys()))
+symbol = valid_symbols[pair]
+
+period = st.selectbox("Select data period:", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=2)
+interval = st.selectbox("Select interval:", ["1d", "1h", "30m"], index=0)
+
+st.markdown("---")
+
+# -----------------------
+# FETCH HISTORICAL DATA
+# -----------------------
+st.info(f"Fetching historical data for {pair} ({symbol})...")
+try:
+    data = yf.download(symbol, period=period, interval=interval, progress=False)
+    if data.empty:
+        st.error("❌ No data found for this symbol/period. Try a different one.")
+        st.stop()
+except Exception as e:
+    st.error(f"❌ Error fetching data: {e}")
+    st.stop()
+
+st.success("✅ Data loaded")
+st.dataframe(data.tail())
+
+# -----------------------
+# PREPARE DATA & MODEL
+# -----------------------
+data = data.copy()
+data["Target"] = data["Close"].shift(-1)
+data = data.dropna()
+
+X = data[["Open", "High", "Low", "Close"]]
+y = data["Target"]
+
+model = RandomForestRegressor(n_estimators=120, random_state=42)
+model.fit(X, y)
+
+# predicted on training set for trend analysis
+data["Predicted_Close"] = model.predict(X)
+latest_row = data.iloc[-1]
+latest_features = np.array(latest_row[["Open", "High", "Low", "Close"]]).reshape(1, -1)
+next_pred = float(model.predict(latest_features)[0])
+
+# performance metrics
+mae = mean_absolute_error(y, data["Predicted_Close"])
+r2 = r2_score(y, data["Predicted_Close"])
+accuracy_est = max(0, (1 - mae / np.mean(y)) * 100)
+
+# -----------------------
+# BUY / SELL / HOLD LOGIC
+# -----------------------
+current_close = float(latest_row["Close"])
+pred_change = (next_pred - current_close) / current_close  # relative change
+pred_change_pct = pred_change * 100
+
+# thresholds — easily tunable
+buy_threshold = 0.0006    # 0.06%  (approx 6 pips on EURUSD)
+sell_threshold = -0.0006
+
+if pred_change >= buy_threshold:
+    suggestion = "BUY"
+    suggestion_color = "green"
+elif pred_change <= sell_threshold:
+    suggestion = "SELL"
+    suggestion_color = "red"
+else:
+    suggestion = "HOLD"
+    suggestion_color = "orange"
+
+# also create a short textual explanation
+explanation = (f"Predicted next close: {next_pred:.5f}. Current close: {current_close:.5f}. "
+               f"Predicted change: {pred_change_pct:.3f}% → Suggestion: {suggestion}")
+
+# -----------------------
+# SHOW RESULTS
+# -----------------------
+st.subheader("📊 Prediction Result")
+st.metric(label=f"Predicted Next {interval} Close for {pair}", value=f"{next_pred:.5f}")
+
+col1, col2, col3, col4 = st.columns([2,2,2,3])
+col1.metric("📉 MAE", f"{mae:.6f}")
+col2.metric("📈 R²", f"{r2:.4f}")
+col3.metric("🎯 Est. Acc.", f"{accuracy_est:.2f}%")
+col4.markdown(f"<div style='padding:10px;border-radius:6px;background:#fafafa;text-align:center'><h3 style='color:{suggestion_color};margin:0'>{suggestion}</h3><small>{explanation}</small></div>", unsafe_allow_html=True)
+
+st.markdown("---")
+
+# -----------------------
+# CANDLESTICK CHART (Plotly)
+# -----------------------
+st.subheader("🕯️ Candlestick Chart (with Predicted Next Close)")
+
+fig = go.Figure(data=[go.Candlestick(
+    x=data.index,
+    open=data["Open"],
+    high=data["High"],
+    low=data["Low"],
+    close=data["Close"],
+    name="Price")])
+
+# add predicted next close as a marker at the next time tick
+# compute x position for next tick
+try:
+    last_index = data.index[-1]
+    # determine next timestamp depending on interval
+    if interval == "1d":
+        next_index = last_index + pd.Timedelta(days=1)
+    elif interval == "1h":
+        next_index = last_index + pd.Timedelta(hours=1)
+    elif interval == "30m":
+        next_index = last_index + pd.Timedelta(minutes=30)
+    else:
+        next_index = last_index + pd.Timedelta(days=1)
+except Exception:
+    next_index = last_index
+
+fig.add_trace(go.Scatter(
+    x=[next_index],
+    y=[next_pred],
+    mode="markers+text",
+    marker=dict(color="green" if suggestion=="BUY" else ("red" if suggestion=="SELL" else "orange"),
+                size=12),
+    text=[f"Pred: {next_pred:.5f}"],
+    textposition="top center",
+    name="Prediction"))
+
+fig.update_layout(
+    xaxis_rangeslider_visible=False,
+    height=520,
+    margin=dict(l=10, r=10, t=30, b=10)
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# -----------------------
+# DOWNLOAD REPORT
+# -----------------------
+latest_data = data.tail(1).copy()
+latest_data["Next_Predicted_Close"] = next_pred
+latest_data["Currency_Pair"] = pair
+latest_data["Interval"] = interval
+latest_data["MAE"] = mae
+latest_data["R2_Score"] = r2
+latest_data["Accuracy(%)"] = accuracy_est
+latest_data["Timestamp"] = datetime.datetime.now()
+latest_data["Suggestion"] = suggestion
+latest_data["Predicted_Change_pct"] = pred_change_pct
+
+csv_buffer = StringIO()
+latest_data.to_csv(csv_buffer, index=False)
+csv_bytes = csv_buffer.getvalue().encode("utf-8")
+
+st.download_button(
+    label="📥 Download Prediction Report (CSV)",
+    data=csv_bytes,
+    file_name=f"{pair.replace('/', '-')}_prediction_report.csv",
+    mime="text/csv"
+)
+
+st.markdown("---")
+st.caption("⚡ Powered by Yahoo Finance & Random Forest AI — Use suggestions as informational only. Backtest heavily before any trading.")
+
+# -----------------------
+# AUTO REFRESH
+# -----------------------
+# show next refresh time in sidebar
+next_refresh_time = datetime.datetime.now() + datetime.timedelta(minutes=refresh_interval)
+st.sidebar.write(f"Next refresh: {next_refresh_time.strftime('%Y-%m-%d %H:%M:%S')} (local)")
+
+# pause and rerun to auto-refresh
+time.sleep(refresh_interval * 60)
+st.experimental_rerun()
